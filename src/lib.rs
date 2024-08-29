@@ -3,7 +3,7 @@ pub extern crate tonic;
 
 pub use error::ConnectError;
 use error::InternalConnectError;
-use http_body::combinators::UnsyncBoxBody;
+use http_body_util::combinators::UnsyncBoxBody;
 use hyper::client::HttpConnector;
 use hyper::Uri;
 use hyper_rustls::HttpsConnector;
@@ -277,10 +277,10 @@ where
 
 mod tls {
     use crate::error::{ConnectError, InternalConnectError};
-    use rustls::{
-        client::{ClientConfig, ServerCertVerified, ServerCertVerifier},
-        Certificate, Error as TLSError, ServerName,
-    };
+    use rustls::{ ClientConfig, Error as TLSError};
+    use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::ServerName;
+   
     use std::{
         path::{Path, PathBuf},
         sync::Arc,
