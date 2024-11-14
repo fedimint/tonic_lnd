@@ -26,15 +26,16 @@ default = ["all"]
 [dependencies]
 hex = "0.4.3"
 http-body = "0.4.5"
-hyper = { version = "0.14.27", features = ["client"], default-features = false }
+hyper = { version = "1.5", features = ["client"], default-features = false }
 prost = "0.12.0"
 rustls = { version = "0.21.0", features = ["dangerous_configuration"], default-features = false }
 rustls-pemfile = "1.0.0"
 hyper-rustls = { version = "0.24.1", features = ["acceptor", "http2", "tls12"], default-features = false }
 tonic = { version = "0.10.0", features = ["transport", "tls"] }
-tokio = { version = "1.32.0", features = ["fs"] }
-tokio-stream = { version = "0.1", features = ["net"] }
+tokio = { version = "1.41.1", features = ["fs"] }
+tokio-stream = { version = "0.1.16", features = ["net"] }
 tower = "0.4.13"
+hyper-util = { version = "0.1.1", features = ["client", "client-legacy", "http1"] }
 
 [build-dependencies]
 tonic-build = "0.10.0"

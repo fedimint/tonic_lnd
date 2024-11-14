@@ -4,16 +4,16 @@ pub extern crate tonic;
 pub use error::ConnectError;
 use error::InternalConnectError;
 use http_body::combinators::UnsyncBoxBody;
-use hyper::client::HttpConnector;
 use hyper::Uri;
 use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::{connect::HttpConnector, Client as HyperClient};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tonic::codegen::{Bytes, InterceptedService};
 use tonic::Status;
 
 type Service = InterceptedService<
-    hyper::Client<HttpsConnector<HttpConnector>, UnsyncBoxBody<Bytes, Status>>,
+    HyperClient<HttpsConnector<HttpConnector>, UnsyncBoxBody<Bytes, Status>>,
     MacaroonInterceptor,
 >;
 
@@ -239,7 +239,7 @@ where
     let macaroon = load_macaroon(macaroon_file).await?;
 
     let svc = InterceptedService::new(
-        hyper::Client::builder().build(connector),
+        HyperClient::builder(connector).build(),
         MacaroonInterceptor { macaroon },
     );
     let uri =
