@@ -30,6 +30,6 @@ fn main() -> std::io::Result<()> {
     tonic_build::configure()
         .build_client(true)
         .build_server(false)
-        .compile(&proto_paths, &[dir])?;
+        .compile_protos(&proto_paths, &[dir])?;
     Ok(())
 }

@@ -1,19 +1,19 @@
 /// This is part of public interface so it's re-exported.
-pub extern crate tonic;
+pub use tonic;
 
 pub use error::ConnectError;
 use error::InternalConnectError;
-use http_body::combinators::UnsyncBoxBody;
-use hyper::client::HttpConnector;
 use hyper::Uri;
-use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::connect::HttpConnector;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use tonic::codegen::{Bytes, InterceptedService};
-use tonic::Status;
+use tonic::codegen::InterceptedService;
 
 type Service = InterceptedService<
-    hyper::Client<HttpsConnector<HttpConnector>, UnsyncBoxBody<Bytes, Status>>,
+    hyper_util::client::legacy::Client<
+        hyper_rustls::HttpsConnector<HttpConnector>,
+        tonic::body::Body,
+    >,
     MacaroonInterceptor,
 >;
 
@@ -236,12 +236,13 @@ where
         .https_or_http()
         .enable_http2()
         .build();
+    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .build(connector);
+
+    // The client implements Service trait directly
     let macaroon = load_macaroon(macaroon_file).await?;
 
-    let svc = InterceptedService::new(
-        hyper::Client::builder().build(connector),
-        MacaroonInterceptor { macaroon },
-    );
+    let svc = InterceptedService::new(client, MacaroonInterceptor { macaroon });
     let uri =
         Uri::from_str(address.as_str()).map_err(|error| InternalConnectError::InvalidAddress {
             address,
@@ -277,25 +278,25 @@ where
 
 mod tls {
     use crate::error::{ConnectError, InternalConnectError};
-    use rustls::{
-        client::{ClientConfig, ServerCertVerified, ServerCertVerifier},
-        Certificate, Error as TLSError, ServerName,
-    };
+    use rustls::client::danger::ServerCertVerifier;
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified};
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+    use rustls::{client::ClientConfig, DigitallySignedStruct, Error as TLSError, SignatureScheme};
     use std::{
         path::{Path, PathBuf},
         sync::Arc,
-        time::SystemTime,
     };
 
     pub(crate) async fn config(
         path: impl AsRef<Path> + Into<PathBuf>,
     ) -> Result<ClientConfig, ConnectError> {
         Ok(ClientConfig::builder()
-            .with_safe_defaults()
+            .dangerous()
             .with_custom_certificate_verifier(Arc::new(CertVerifier::load(path).await?))
             .with_no_client_auth())
     }
 
+    #[derive(Debug)]
     pub(crate) struct CertVerifier {
         certs: Vec<Vec<u8>>,
     }
@@ -312,12 +313,16 @@ mod tls {
             });
             let mut reader = &*contents;
 
-            let certs = try_map_err!(rustls_pemfile::certs(&mut reader), |error| {
+            let cert_der_vec = rustls_pemfile::certs(&mut reader).map_err(|error| {
                 InternalConnectError::ParseCert {
                     file: path.into(),
                     error,
                 }
-            });
+            })?;
+            let certs: Vec<Vec<u8>> = cert_der_vec
+                .into_iter()
+                .map(|cert_der| cert_der.to_vec())
+                .collect();
 
             Ok(CertVerifier { certs })
         }
@@ -326,18 +331,17 @@ mod tls {
     impl ServerCertVerifier for CertVerifier {
         fn verify_server_cert(
             &self,
-            end_entity: &Certificate,
-            intermediates: &[Certificate],
+            end_entity: &CertificateDer,
+            intermediates: &[CertificateDer],
             _server_name: &ServerName,
-            _scts: &mut dyn Iterator<Item = &[u8]>,
             _ocsp_response: &[u8],
-            _now: SystemTime,
+            _now: UnixTime,
         ) -> Result<ServerCertVerified, TLSError> {
             let mut certs = intermediates
                 .iter()
-                .map(|c| c.0.clone())
+                .map(|c| c.as_ref().to_vec())
                 .collect::<Vec<Vec<u8>>>();
-            certs.push(end_entity.0.clone());
+            certs.push(end_entity.as_ref().to_vec());
             certs.sort();
 
             let mut our_certs = self.certs.clone();
@@ -358,6 +362,42 @@ mod tls {
                 }
             }
             Ok(ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer,
+            _dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, TLSError> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer,
+            _dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, TLSError> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            vec![
+                SignatureScheme::RSA_PKCS1_SHA1,
+                SignatureScheme::ECDSA_SHA1_Legacy,
+                SignatureScheme::RSA_PKCS1_SHA256,
+                SignatureScheme::ECDSA_NISTP256_SHA256,
+                SignatureScheme::RSA_PKCS1_SHA384,
+                SignatureScheme::ECDSA_NISTP384_SHA384,
+                SignatureScheme::RSA_PKCS1_SHA512,
+                SignatureScheme::ECDSA_NISTP521_SHA512,
+                SignatureScheme::RSA_PSS_SHA256,
+                SignatureScheme::RSA_PSS_SHA384,
+                SignatureScheme::RSA_PSS_SHA512,
+                SignatureScheme::ED25519,
+                SignatureScheme::ED448,
+            ]
         }
     }
 }
