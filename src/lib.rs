@@ -278,126 +278,48 @@ where
 
 mod tls {
     use crate::error::{ConnectError, InternalConnectError};
-    use rustls::client::danger::ServerCertVerifier;
-    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified};
-    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-    use rustls::{client::ClientConfig, DigitallySignedStruct, Error as TLSError, SignatureScheme};
-    use std::{
-        path::{Path, PathBuf},
-        sync::Arc,
-    };
+    use rustls::{client::ClientConfig, RootCertStore};
+    use std::path::{Path, PathBuf};
 
     pub(crate) async fn config(
         path: impl AsRef<Path> + Into<PathBuf>,
     ) -> Result<ClientConfig, ConnectError> {
+        let root_certs = load_root_certs(path).await?;
+
         Ok(ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(CertVerifier::load(path).await?))
+            .with_root_certificates(root_certs)
             .with_no_client_auth())
     }
 
-    #[derive(Debug)]
-    pub(crate) struct CertVerifier {
-        certs: Vec<Vec<u8>>,
-    }
+    async fn load_root_certs(
+        path: impl AsRef<Path> + Into<PathBuf>,
+    ) -> Result<RootCertStore, InternalConnectError> {
+        let path_buf: PathBuf = path.into();
+        let contents = try_map_err!(tokio::fs::read(&path_buf).await, |error| {
+            InternalConnectError::ReadFile {
+                file: path_buf.clone(),
+                error,
+            }
+        });
+        let mut reader = &*contents;
 
-    impl CertVerifier {
-        pub(crate) async fn load(
-            path: impl AsRef<Path> + Into<PathBuf>,
-        ) -> Result<Self, InternalConnectError> {
-            let contents = try_map_err!(tokio::fs::read(&path).await, |error| {
-                InternalConnectError::ReadFile {
-                    file: path.into(),
-                    error,
-                }
-            });
-            let mut reader = &*contents;
+        let cert_der_vec = rustls_pemfile::certs(&mut reader).map_err(|error| {
+            InternalConnectError::ParseCert {
+                file: path_buf.clone(),
+                error,
+            }
+        })?;
 
-            let cert_der_vec = rustls_pemfile::certs(&mut reader).map_err(|error| {
+        let mut root_cert_store = RootCertStore::empty();
+        for cert_der in cert_der_vec {
+            root_cert_store.add(cert_der.into()).map_err(|error| {
                 InternalConnectError::ParseCert {
-                    file: path.into(),
-                    error,
+                    file: path_buf.clone(),
+                    error: std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()),
                 }
             })?;
-            let certs: Vec<Vec<u8>> = cert_der_vec
-                .into_iter()
-                .map(|cert_der| cert_der.to_vec())
-                .collect();
-
-            Ok(CertVerifier { certs })
-        }
-    }
-
-    impl ServerCertVerifier for CertVerifier {
-        fn verify_server_cert(
-            &self,
-            end_entity: &CertificateDer,
-            intermediates: &[CertificateDer],
-            _server_name: &ServerName,
-            _ocsp_response: &[u8],
-            _now: UnixTime,
-        ) -> Result<ServerCertVerified, TLSError> {
-            let mut certs = intermediates
-                .iter()
-                .map(|c| c.as_ref().to_vec())
-                .collect::<Vec<Vec<u8>>>();
-            certs.push(end_entity.as_ref().to_vec());
-            certs.sort();
-
-            let mut our_certs = self.certs.clone();
-            our_certs.sort();
-
-            if self.certs.len() != certs.len() {
-                return Err(TLSError::General(format!(
-                    "Mismatched number of certificates (Expected: {}, Presented: {})",
-                    self.certs.len(),
-                    certs.len()
-                )));
-            }
-            for (c, p) in our_certs.iter().zip(certs.iter()) {
-                if *p != *c {
-                    return Err(TLSError::General(
-                        "Server certificates do not match ours".to_string(),
-                    ));
-                }
-            }
-            Ok(ServerCertVerified::assertion())
         }
 
-        fn verify_tls12_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, TLSError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, TLSError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-            vec![
-                SignatureScheme::RSA_PKCS1_SHA1,
-                SignatureScheme::ECDSA_SHA1_Legacy,
-                SignatureScheme::RSA_PKCS1_SHA256,
-                SignatureScheme::ECDSA_NISTP256_SHA256,
-                SignatureScheme::RSA_PKCS1_SHA384,
-                SignatureScheme::ECDSA_NISTP384_SHA384,
-                SignatureScheme::RSA_PKCS1_SHA512,
-                SignatureScheme::ECDSA_NISTP521_SHA512,
-                SignatureScheme::RSA_PSS_SHA256,
-                SignatureScheme::RSA_PSS_SHA384,
-                SignatureScheme::RSA_PSS_SHA512,
-                SignatureScheme::ED25519,
-                SignatureScheme::ED448,
-            ]
-        }
+        Ok(root_cert_store)
     }
 }
