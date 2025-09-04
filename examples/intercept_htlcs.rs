@@ -60,6 +60,9 @@ async fn main() {
             preimage: vec![],
             failure_message: vec![],
             failure_code: 0,
+            in_amount_msat: 0,
+            out_amount_msat: 0,
+            out_wire_custom_records: Default::default(),
         };
         tx.send(response).await.unwrap();
     }
