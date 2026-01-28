@@ -60,6 +60,7 @@ async fn main() {
             preimage: vec![],
             failure_message: vec![],
             failure_code: 0,
+            ..Default::default()
         };
         tx.send(response).await.unwrap();
     }
