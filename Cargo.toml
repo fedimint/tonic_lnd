@@ -1,6 +1,6 @@
 [package]
 name = "fedimint-tonic-lnd"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.65.0"
 description = "An async library implementing LND RPC via tonic and prost. Forked from https://github.com/Kixunil/tonic_lnd"
